@@ -25,10 +25,10 @@ class YagmailClient(EmailClient):
 
     def send(self, message: EmailMessage) -> None:
         contents = []
-        if message.text:
-            contents.append(message.text)
         if message.html:
             contents.append(message.html)
+        elif message.text:
+            contents.append(message.text)
 
         self._smtp.send(
             to=list(message.to),

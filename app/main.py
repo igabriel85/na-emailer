@@ -1,7 +1,10 @@
 from __future__ import annotations
+
+import json
 import logging
 import os
 import functions_framework
+from typing import Any
 from cloudevents.http import from_http
 from flask import Request
 from .clients.factory import create_email_client
@@ -32,6 +35,7 @@ def _configure_logging(level_name: str) -> None:
     if not _LOGGING_CONFIGURED:
         logger.info("na-emailer started (ready to receive events)")
         _LOGGING_CONFIGURED = True
+
 _configure_logging(os.getenv("NA_LOG_LEVEL", "INFO"))
 
 
@@ -56,7 +60,6 @@ def _ctx_from_cloudevent(ce) -> EventContext:
         attrs = {}
 
     extensions = {k: v for k, v in attrs.items() if k not in spec_keys}
-
     return EventContext(
         id=ce["id"],
         source=ce["source"],
@@ -65,10 +68,46 @@ def _ctx_from_cloudevent(ce) -> EventContext:
         time=ce.get("time"),
         dataschema=ce.get("dataschema"),
         datacontenttype=ce.get("datacontenttype"),
-        data=ce.get("data"),
+        data=ce.data,
         extensions=extensions,
     )
 
+def _parse_recipients(value) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return []
+
+
+def _recipients_from_event(ctx: EventContext, filter="email_to") -> list[str]:
+    #prefer CloudEvent extension first (binary mode: ce-email_to header -> extension)
+    if filter in ctx.extensions:
+        return _parse_recipients(ctx.extensions.get(filter))
+
+    data: Any = ctx.data
+
+    #normalize structured-mode data into a dict if it came in as JSON string/bytes
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            data = data.decode("utf-8")
+        except Exception:
+            data = None
+
+    if isinstance(data, str):
+        s = data.strip()
+        if s.startswith("{") and s.endswith("}"):
+            try:
+                data = json.loads(s)
+            except Exception:
+                data = None
+
+    if isinstance(data, dict) and filter in data:
+        return _parse_recipients(data.get(filter))
+
+    return []
 
 @functions_framework.http
 def handle(request: Request):
@@ -101,6 +140,10 @@ def handle(request: Request):
         )
         return ("", 204)
 
+    #if ce contains inline templates
+    if ctx.data and isinstance(ctx.data, dict) and "templates_inline_json" in ctx.data:
+        settings.templates_inline_json =  ctx.data["templates_inline_json"]
+
     try:
         renderer = TemplateRenderer(settings)
         subject, text, html = renderer.render(ctx)
@@ -108,22 +151,30 @@ def handle(request: Request):
         logger.exception("Failed to render email templates")
         return ("Template rendering failed", 500)
 
-    subject = f"{settings.email_subject_prefix}{subject}" if settings.email_subject_prefix else subject
+    #CE overrides NA_EMAIL_TO if present, to allow dynamic recipients per event.
+    event_recipients = _recipients_from_event(ctx)
+    event_cc = _recipients_from_event(ctx, filter="email_cc")
+    event_bcc = _recipients_from_event(ctx, filter="email_bcc")
+
+    recipients = event_recipients or settings.email_to
+    email_cc = event_cc or settings.email_cc
+    email_bcc = event_bcc or settings.email_bcc
 
     msg = EmailMessage(
         subject=subject,
         text=text,
         html=html,
         sender=settings.email_from,
-        to=settings.email_to,
-        cc=settings.email_cc,
-        bcc=settings.email_bcc,
+        to=recipients,
+        cc=email_cc,
+        bcc=email_bcc,
         headers={
             "X-CloudEvent-ID": ctx.id,
             "X-CloudEvent-Type": ctx.type,
             "X-CloudEvent-Source": ctx.source,
         },
     )
+    print(f"Prepared email message: subject='{msg.subject}', to={msg.to}, cc={msg.cc}, bcc={msg.bcc}")
 
     if not msg.to:
         logger.warning(
