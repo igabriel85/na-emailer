@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import functions_framework
@@ -88,34 +87,7 @@ def _parse_recipients(value) -> list[str]:
     return []
 
 
-def _recipients_from_event(ctx: EventContext, filter="email_to") -> list[str]:
-    #prefer CloudEvent extension first (binary mode: ce-email_to header -> extension)
-    if filter in ctx.extensions:
-        return _parse_recipients(ctx.extensions.get(filter))
-
-    data: Any = ctx.data
-
-    #normalize structured-mode data into a dict if it came in as JSON string/bytes
-    if isinstance(data, (bytes, bytearray)):
-        try:
-            data = data.decode("utf-8")
-        except Exception:
-            data = None
-
-    if isinstance(data, str):
-        s = data.strip()
-        if s.startswith("{") and s.endswith("}"):
-            try:
-                data = json.loads(s)
-            except Exception:
-                data = None
-
-    if isinstance(data, dict) and filter in data:
-        return _parse_recipients(data.get(filter))
-
-    return []
-
-def _recipients_from_event_v2(ctx: EventContext):
+def _recipients_from_event(ctx: EventContext):
     #support both ce-email_to and email_to in data for maximum flexibility.
     return _parse_recipients(ctx.emailto), _parse_recipients(ctx.emailcc), _parse_recipients(ctx.emailbcc)
 
@@ -145,14 +117,14 @@ def handle(request: Request):
 
     try:
         ce = from_http(request.headers, request.get_data())
-    except Exception:
-        logger.exception("Failed to parse incoming CloudEvent")
+    except Exception as e:
+        logger.exception(f"Failed to parse incoming CloudEvent: {e}")
         return ("Invalid CloudEvent", 400)
 
     try:
         ctx = _ctx_from_cloudevent(ce)
-    except Exception:
-        logger.exception("Failed to translate CloudEvent into internal context")
+    except Exception as e:
+        logger.exception(f"Failed to translate CloudEvent into internal context: {e}")
         return ("Invalid CloudEvent", 400)
 
     logger.info(
@@ -167,14 +139,7 @@ def handle(request: Request):
         )
         return ("", 204)
 
-
-
-    #CE overrides NA_EMAIL_TO if present, to allow dynamic recipients per event.
-    # event_recipients = _recipients_from_event(ctx)
-    # event_cc = _recipients_from_event(ctx, filter="email_cc")
-    # event_bcc = _recipients_from_event(ctx, filter="email_bcc")
-
-    event_recipients, event_cc, event_bcc =_recipients_from_event_v2(ctx)
+    event_recipients, event_cc, event_bcc =_recipients_from_event(ctx)
 
     recipients = event_recipients or settings.email_to
     email_cc = event_cc or settings.email_cc
@@ -186,7 +151,7 @@ def handle(request: Request):
         raw_mime = _extract_raw_mime(ctx)
         if not raw_mime:
             return ("Missing raw MIME payload in CloudEvent data", 400)
-        print(raw_mime)
+
         msg = EmailMessage(
             subject="",
             text=None,
@@ -214,8 +179,8 @@ def handle(request: Request):
         try:
             client = create_email_client(settings)
             client.send(msg)
-        except Exception:
-            logger.exception("Failed to send raw MIME email")
+        except Exception as e:
+            logger.exception(f"Failed to send raw MIME email: {e}")
             return ("Email send failed", 502)
 
         return ("", 202)
@@ -227,8 +192,8 @@ def handle(request: Request):
     try:
         renderer = TemplateRenderer(settings)
         subject, text, html = renderer.render(ctx)
-    except Exception:
-        logger.exception("Failed to render email templates")
+    except Exception as e:
+        logger.exception(f"Failed to render email templates: {e}")
         return ("Template rendering failed", 500)
 
     msg = EmailMessage(
@@ -246,7 +211,7 @@ def handle(request: Request):
         },
         raw_mime=raw_mime,
     )
-    print(f"Prepared email message: subject='{msg.subject}', to={msg.to}, cc={msg.cc}, bcc={msg.bcc}")
+    logger.info(f"Prepared email message: subject='{msg.subject}', to={msg.to}, cc={msg.cc}, bcc={msg.bcc}")
 
     if not msg.to:
         logger.warning(
@@ -262,8 +227,8 @@ def handle(request: Request):
     try:
         client = create_email_client(settings)
         client.send(msg)
-    except Exception:
-        logger.exception("Failed to send email")
+    except Exception as e:
+        logger.exception(f"Failed to send email: {e}")
         return ("Email send failed", 502)
 
     logger.info("Email queued/sent", extra={"to": list(msg.to), "subject": msg.subject, "ce_id": ctx.id})
