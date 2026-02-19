@@ -45,6 +45,7 @@ Example value:
 Notes:
 - Keys must be the exact template filenames the renderer looks up, e.g. `default.subject.j2`, `default.txt.j2`, `default.html.j2`.
 - When embedding JSON in YAML (Knative manifests), make sure to quote/escape properly (usually a YAML block scalar is easiest).
+- Inline templates will also be defineble via CE data (e.g. `data.templates_inline_json`).
 
 #### Filesystem templates
 - `NA_TEMPLATES_DIR`: templates folder.
@@ -54,9 +55,9 @@ Notes:
 ### Email
 - `NA_EMAIL_CLIENT`: email backend (default `yagmail`).
 - `NA_EMAIL_FROM`: optional sender.
-- `NA_EMAIL_TO`: comma-separated recipients.
-- `NA_EMAIL_CC`, `NA_EMAIL_BCC`: optional.
-- `NA_EMAIL_SUBJECT_PREFIX`: optional prefix.
+- `NA_EMAIL_TO`: comma-separated recipients, optional is overriden by CE data.
+- `NA_EMAIL_CC`, `NA_EMAIL_BCC`: optional, overriden by CE settings.
+- `NA_EMAIL_SUBJECT_PREFIX`: optional prefix, overriden by CE settings.
 - `NA_DRY_RUN`: `true|false` (if true, renders but doesn’t send).
 
 ### Yagmail backend
@@ -67,6 +68,8 @@ Required when `NA_EMAIL_CLIENT=yagmail` and `NA_DRY_RUN=false`:
 Optional:
 - `NA_YAGMAIL_HOST`, `NA_YAGMAIL_PORT`
 - `NA_YAGMAIL_SMTP_STARTTLS`, `NA_YAGMAIL_SMTP_SSL`
+
+Note: In case of standard Gmail account this settings are not required.
 
 ## Templates
 Templates are chosen by **base name**.
@@ -80,6 +83,7 @@ The template context includes:
 - `ce`: CloudEvent attributes (plus extensions)
 - `data`: the CloudEvent data
 
+Note: If `inline_templates` are provided, the html template is prioritized and used for email body. If only the text template is provided, it will be used as the email body.
 ## Local development
 ### Option A: run via `start.py` (recommended)
 This prints an explicit “Waiting for CloudEvents...” line and defaults to dry-run.
@@ -102,7 +106,32 @@ functions-framework --target handle --port 8080
 ```zsh
 curl -i http://localhost:8080/ \
   -H 'Content-Type: application/cloudevents+json' \
-  -d '{"specversion":"1.0","id":"1","source":"/local","type":"com.acme.test","datacontenttype":"application/json","data":{"hello":"world"}}'
+  -d '{
+  "specversion": "1.0",
+  "id": "1",
+  "source": "/local",
+  "type": "com.acme.test",
+  "datacontenttype": "application/json",
+  "data": {
+    "name": "Hello world",
+    "subject": "NA Notification Test 3",
+    "email_to": [
+      "juhasz.gabriel@gmail.com"
+    ],
+    "email_cc": [
+      "juhasz_gabriel@yahoo.com"
+    ],
+    "email_bcc": [
+    ],
+    "templates_inline_json": {
+      "default.subject.j2": "[{{ ce.type }}] Notification",
+      "default.txt.j2": "Hello {{ data.name }}\n\nCloudEvent: {{ ce.id }}\nType: {{ ce.type }}\nSource: {{ ce.source }}\n",
+      "default.html.j2": "<!doctype html>\n<html>\n  <body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;\">\n    <h2>NA Notification</h2>\n    <p><b>Name:</b> {{ data.name }}</p>\n\n    <h3>CloudEvent</h3>\n    <ul>\n      <li><b>id</b>: {{ ce.id }}</li>\n      <li><b>type</b>: {{ ce.type }}</li>\n      <li><b>source</b>: {{ ce.source }}</li>\n      <li><b>subject</b>: {{ ce.subject }}</li>\n      <li><b>time</b>: {{ ce.time }}</li>\n    </ul>\n\n    <h3>Data</h3>\n    <pre style=\"background:#f6f8fa;padding:12px;border-radius:6px;\">{{ data | tojson(indent=2) }}</pre>\n  </body>\n</html>\n"
+    }
+  }
+}
+'
+
 ```
 
 ## Notes
