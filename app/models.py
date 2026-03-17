@@ -14,6 +14,8 @@ class EmailMessage:
     bcc: Sequence[str] = field(default_factory=list)
     headers: Mapping[str, str] = field(default_factory=dict)
 
+    raw_mime: str | None = None
+
 
 @dataclass(frozen=True)
 class EventContext:
@@ -25,6 +27,9 @@ class EventContext:
     time: str | None
     dataschema: str | None
     datacontenttype: str | None
+    emailto: str | None
+    emailcc: str | None
+    emailbcc: str | None
     #raw data
     data: Any
     extensions: Mapping[str, Any]
@@ -39,6 +44,9 @@ class EventContext:
                 "time": self.time,
                 "dataschema": self.dataschema,
                 "datacontenttype": self.datacontenttype,
+                "emailto": self.emailto,
+                "emailcc": self.emailcc,
+                "emailbcc": self.emailbcc,
                 **self.extensions,
             },
             "data": self.data,
