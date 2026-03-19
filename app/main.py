@@ -110,6 +110,21 @@ def _extract_raw_mime(ctx: EventContext) -> str | None:
 
 @functions_framework.http
 def handle(request: Request):
+
+    #health check endpoint
+    if request.path == "/healthz":
+        return ("OK", 200)
+
+    #any other path except / should return 404
+    if request.path != "/":
+        logger.error(f"Invalid endpoint: {request.path}")
+        return ("Not Found", 404)
+
+    #only POST is allowed for event ingestion
+    if request.method != "POST":
+        logger.error(f"Invalid HTTP method: {request.method}")
+        return ("Method Not Allowed", 405)
+
     settings = load_settings()
     _configure_logging(settings.log_level)
 
